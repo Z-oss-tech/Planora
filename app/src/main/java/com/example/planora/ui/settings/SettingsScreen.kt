@@ -1,8 +1,13 @@
 package com.example.planora.ui.settings
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -24,10 +29,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
+import androidx.work.*
+import com.example.planora.R
+import com.example.planora.workers.ReminderWorker
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FirebaseFirestore
+import java.util.concurrent.TimeUnit
+import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import android.content.Context
 
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 private val SBG       = Color(0xFF060608)
@@ -78,6 +94,113 @@ fun SettingsScreen(navController: NavController) {
             db.collection("users").document(userId).collection("settings").document("preferences")
         else null
     }
+    fun createNotificationChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "reminder_channel",
+                "Reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Task reminders"
+            }
+
+            val manager =
+                context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    fun showTestNotification(context: Context) {
+        val notification = NotificationCompat.Builder(context, "reminder_channel")
+            .setSmallIcon(R.drawable.planora)
+            .setContentTitle("Planora 🔔")
+            .setContentText("Bhai app open kar, apne tasks pending hai 😄")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .build()
+        @SuppressLint ("MissingPermission")
+        NotificationManagerCompat.from(context).notify(1, notification)
+    }
+    // Save a single preference key to Firestore
+    fun savePref(key: String, value: Boolean) {
+        prefsRef?.set(
+            mapOf(
+                "notificationsEnabled" to notificationsEnabled,
+                "dailyReminderEnabled" to dailyReminderEnabled,
+                "showCompletedTasks"   to showCompletedTasks
+            ).toMutableMap().also { it[key] = value },
+            com.google.firebase.firestore.SetOptions.merge()
+        )
+    }
+
+    // Notification Permission Launcher
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+
+        if (isGranted) {
+            notificationsEnabled = true
+            savePref("notificationsEnabled", true)
+
+            // 🔥 SHOW TEST NOTIFICATION
+            createNotificationChannel(context)
+            showTestNotification(context)
+
+        } else {
+            notificationsEnabled = false
+            savePref("notificationsEnabled", false)
+
+            Toast.makeText(
+                context,
+                "Notification permission denied",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    fun checkNotificationPermission(onGranted: () -> Unit) {
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+
+            when {
+
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED -> {
+
+                    createNotificationChannel(context)
+                    onGranted()
+                    showTestNotification(context)
+                }
+
+                else -> {
+                    launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+
+        } else {
+            createNotificationChannel(context)
+            onGranted()
+            showTestNotification(context)
+        }
+    }
+
+    fun scheduleDailyReminder(enable: Boolean) {
+        val workManager = WorkManager.getInstance(context)
+        if (enable) {
+            val reminderRequest = PeriodicWorkRequestBuilder<ReminderWorker>(24, TimeUnit.HOURS)
+                .setInitialDelay(1, TimeUnit.HOURS) // Example delay
+                .addTag("daily_reminder")
+                .build()
+            workManager.enqueueUniquePeriodicWork(
+                "daily_reminder",
+                ExistingPeriodicWorkPolicy.KEEP,
+                reminderRequest
+            )
+        } else {
+            workManager.cancelUniqueWork("daily_reminder")
+        }
+    }
 
     // Load preferences from Firestore once
     LaunchedEffect(userId) {
@@ -92,18 +215,6 @@ fun SettingsScreen(navController: NavController) {
                 prefsLoaded = true
             }
             ?.addOnFailureListener { prefsLoaded = true }
-    }
-
-    // Save a single preference key to Firestore
-    fun savePref(key: String, value: Boolean) {
-        prefsRef?.set(
-            mapOf(
-                "notificationsEnabled" to notificationsEnabled,
-                "dailyReminderEnabled" to dailyReminderEnabled,
-                "showCompletedTasks"   to showCompletedTasks
-            ).toMutableMap().also { it[key] = value },
-            com.google.firebase.firestore.SetOptions.merge()
-        )
     }
 
     Column(
@@ -192,9 +303,16 @@ fun SettingsScreen(navController: NavController) {
                 title    = "Notifications",
                 subtitle = "Enable push notifications",
                 checked  = notificationsEnabled,
-                onToggle = {
-                    notificationsEnabled = it
-                    savePref("notificationsEnabled", it)   // FIX 3
+                onToggle = { enabled ->
+                    if (enabled) {
+                        checkNotificationPermission {
+                            notificationsEnabled = true
+                            savePref("notificationsEnabled", true)
+                        }
+                    } else {
+                        notificationsEnabled = false
+                        savePref("notificationsEnabled", false)
+                    }
                 }
             )
             GroupDivider()
@@ -204,9 +322,18 @@ fun SettingsScreen(navController: NavController) {
                 title    = "Daily Reminder",
                 subtitle = "Get a nudge to check your tasks",
                 checked  = dailyReminderEnabled,
-                onToggle = {
-                    dailyReminderEnabled = it
-                    savePref("dailyReminderEnabled", it)   // FIX 3
+                onToggle = { enabled ->
+                    if (enabled) {
+                        checkNotificationPermission {
+                            dailyReminderEnabled = true
+                            savePref("dailyReminderEnabled", true)
+                            scheduleDailyReminder(true)
+                        }
+                    } else {
+                        dailyReminderEnabled = false
+                        savePref("dailyReminderEnabled", false)
+                        scheduleDailyReminder(false)
+                    }
                 }
             )
             GroupDivider()
@@ -437,27 +564,17 @@ fun SettingsScreen(navController: NavController) {
 
                 // Finally delete the top-level user doc, then the Auth account
                 userDocRef.delete().addOnCompleteListener {
-                    user?.delete()
-                        ?.addOnSuccessListener {
-                            showDeleteDialog = false
-                            navController.navigate("login") { popUpTo(0) }
-                        }
-                        ?.addOnFailureListener {
-                            Toast.makeText(
-                                context,
-                                "Re-sign-in required before deleting. Please sign out and back in.",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            showDeleteDialog = false
-                        }
+                    user?.delete()?.addOnCompleteListener {
+                        showDeleteDialog = false
+                        navController.navigate("login") { popUpTo(0) }
+                    }
                 }
             }
         )
     }
 }
 
-// ─── Layout helpers ────────────────────────────────────────────────────────────
-
+// ─── Shared Components ────────────────────────────────────────────────────────
 @Composable
 private fun SectionHeader(title: String) {
     Text(
@@ -466,7 +583,7 @@ private fun SectionHeader(title: String) {
         fontWeight    = FontWeight.Bold,
         letterSpacing = 1.5.sp,
         color         = STextTertiary,
-        modifier      = Modifier.padding(horizontal = 20.dp, vertical = 6.dp)
+        modifier      = Modifier.padding(start = 24.dp, top = 12.dp, bottom = 6.dp)
     )
 }
 
@@ -476,30 +593,16 @@ private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
         modifier = Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(SSurface1)
-            .border(1.dp, SBorder, RoundedCornerShape(18.dp)),
-        content  = content
+            .border(1.dp, SBorder, RoundedCornerShape(20.dp)),
+        content = content
     )
 }
 
 @Composable
 private fun GroupDivider() {
-    HorizontalDivider(color = SBorder, modifier = Modifier.padding(start = 56.dp))
-}
-
-@Composable
-private fun IconBubble(icon: ImageVector, bg: Color) {
-    Box(
-        modifier = Modifier
-            .size(34.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(bg.copy(0.15f))
-            .border(1.dp, bg.copy(0.25f), RoundedCornerShape(10.dp)),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(icon, null, tint = bg, modifier = Modifier.size(17.dp))
-    }
+    HorizontalDivider(color = SBorder, modifier = Modifier.padding(horizontal = 16.dp))
 }
 
 @Composable
@@ -512,27 +615,29 @@ private fun ToggleRow(
     onToggle: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        modifier          = Modifier.fillMaxWidth().padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        IconBubble(icon = icon, bg = iconBg)
+        Box(
+            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(iconBg.copy(0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, null, tint = iconBg, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = STextPrimary)
-            Text(subtitle, fontSize = 11.sp, color = STextSecondary)
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = STextPrimary)
+            Text(subtitle, fontSize = 12.sp, color = STextSecondary)
         }
         Switch(
-            checked         = checked,
+            checked      = checked,
             onCheckedChange = onToggle,
-            colors          = SwitchDefaults.colors(
-                checkedThumbColor    = Color.White,
-                checkedTrackColor    = SBlue,
-                checkedBorderColor   = SBlue,
-                uncheckedThumbColor  = STextTertiary,
-                uncheckedTrackColor  = SSurface3,
-                uncheckedBorderColor = SBorder
+            colors       = SwitchDefaults.colors(
+                checkedThumbColor       = Color.White,
+                checkedTrackColor       = SBlue,
+                uncheckedThumbColor     = STextSecondary,
+                uncheckedTrackColor     = SSurface3,
+                uncheckedBorderColor    = Color.Transparent
             )
         )
     }
@@ -544,148 +649,92 @@ private fun ActionRow(
     iconBg:      Color,
     title:       String,
     subtitle:    String,
-    titleColor:  Color   = STextPrimary,
+    titleColor:  Color = STextPrimary,
     showChevron: Boolean = true,
     onClick:     () -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(horizontal = 14.dp, vertical = 13.dp),
-        verticalAlignment     = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        modifier          = Modifier.fillMaxWidth().clickable { onClick() }.padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        IconBubble(icon = icon, bg = iconBg)
+        Box(
+            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(iconBg.copy(0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, null, tint = iconBg, modifier = Modifier.size(18.dp))
+        }
+        Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = titleColor)
-            Text(subtitle, fontSize = 11.sp, color = STextSecondary)
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = titleColor)
+            Text(subtitle, fontSize = 12.sp, color = STextSecondary)
         }
         if (showChevron) {
-            Icon(Icons.Filled.ChevronRight, null, tint = STextTertiary, modifier = Modifier.size(18.dp))
+            Icon(Icons.Default.ChevronRight, null, tint = STextTertiary, modifier = Modifier.size(18.dp))
         }
     }
 }
 
-// ─── Edit Name Dialog ──────────────────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EditNameDialog(
-    currentName: String,
-    onDismiss:   () -> Unit,
-    onConfirm:   (String) -> Unit
-) {
+private fun EditNameDialog(currentName: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var name by remember { mutableStateOf(currentName) }
-
     Dialog(onDismissRequest = onDismiss) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
-                .background(SSurface1)
-                .border(1.dp, SBorder, RoundedCornerShape(24.dp))
-                .padding(24.dp)
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(SSurface1).border(1.dp, SBorder, RoundedCornerShape(24.dp)).padding(20.dp)
         ) {
             Column {
-                Row(
-                    verticalAlignment     = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    IconBubble(Icons.Outlined.Edit, SBlue)
-                    Text("Edit Name", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = STextPrimary)
-                }
-                Spacer(Modifier.height(18.dp))
+                Text("Edit Name", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = STextPrimary)
+                Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value         = name,
                     onValueChange = { name = it },
-                    label         = { Text("Display Name", color = STextSecondary, fontSize = 12.sp) },
+                    placeholder   = { Text("Enter your name", color = STextTertiary) },
                     modifier      = Modifier.fillMaxWidth(),
                     shape         = RoundedCornerShape(12.dp),
-                    singleLine    = true,
                     colors        = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor      = SBlue.copy(0.6f),
-                        unfocusedBorderColor    = SBorder,
-                        focusedTextColor        = STextPrimary,
-                        unfocusedTextColor      = STextPrimary,
-                        cursorColor             = SBlue,
-                        focusedContainerColor   = SSurface2,
-                        unfocusedContainerColor = SSurface2,
-                        focusedLabelColor       = SBlue,
-                        unfocusedLabelColor     = STextSecondary
+                        focusedBorderColor = SBlue,
+                        unfocusedBorderColor = SBorder,
+                        focusedTextColor = STextPrimary,
+                        unfocusedTextColor = STextPrimary,
+                        cursorColor = SBlue
                     )
                 )
                 Spacer(Modifier.height(20.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick  = onDismiss,
-                        modifier = Modifier.weight(1f),
-                        shape    = RoundedCornerShape(12.dp),
-                        border   = BorderStroke(1.dp, SBorder),
-                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = STextSecondary)
-                    ) { Text("Cancel", fontWeight = FontWeight.SemiBold) }
-                    Button(
-                        onClick  = { if (name.isNotBlank()) onConfirm(name) },
-                        // Disabled until the name is actually different from current
-                        enabled  = name.isNotBlank() && name.trim() != currentName.trim(),
-                        modifier = Modifier.weight(1f),
-                        shape    = RoundedCornerShape(12.dp),
-                        colors   = ButtonDefaults.buttonColors(
-                            containerColor         = SBlue,
-                            contentColor           = Color.White,
-                            disabledContainerColor = SSurface3,
-                            disabledContentColor   = STextTertiary
-                        )
-                    ) { Text("Save", fontWeight = FontWeight.Bold) }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, SBorder), colors = ButtonDefaults.outlinedButtonColors(contentColor = STextSecondary)) {
+                        Text("Cancel")
+                    }
+                    Button(onClick = { if (name.isNotBlank()) onConfirm(name) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = SBlue)) {
+                        Text("Save")
+                    }
                 }
             }
         }
     }
 }
 
-// ─── Generic Confirm Dialog ────────────────────────────────────────────────────
 @Composable
-private fun ConfirmActionDialog(
-    icon:         ImageVector,
-    iconBg:       Color,
-    title:        String,
-    message:      String,
-    confirmLabel: String,
-    confirmColor: Color,
-    onDismiss:    () -> Unit,
-    onConfirm:    () -> Unit
-) {
+private fun ConfirmActionDialog(icon: ImageVector, iconBg: Color, title: String, message: String, confirmLabel: String, confirmColor: Color, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
-                .background(SSurface1)
-                .border(1.dp, SBorder, RoundedCornerShape(24.dp))
-                .padding(24.dp)
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(SSurface1).border(1.dp, SBorder, RoundedCornerShape(24.dp)).padding(20.dp)
         ) {
-            Column {
-                IconBubble(icon = icon, bg = iconBg)
-                Spacer(Modifier.height(14.dp))
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = STextPrimary)
-                Spacer(Modifier.height(6.dp))
-                Text(message, fontSize = 13.sp, color = STextSecondary, lineHeight = 18.sp)
-                Spacer(Modifier.height(22.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    OutlinedButton(
-                        onClick  = onDismiss,
-                        modifier = Modifier.weight(1f),
-                        shape    = RoundedCornerShape(12.dp),
-                        border   = BorderStroke(1.dp, SBorder),
-                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = STextSecondary)
-                    ) { Text("Cancel", fontWeight = FontWeight.SemiBold) }
-                    Button(
-                        onClick  = onConfirm,
-                        modifier = Modifier.weight(1f),
-                        shape    = RoundedCornerShape(12.dp),
-                        colors   = ButtonDefaults.buttonColors(
-                            containerColor = confirmColor,
-                            contentColor   = Color.White
-                        )
-                    ) { Text(confirmLabel, fontWeight = FontWeight.Bold) }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(modifier = Modifier.size(52.dp).clip(CircleShape).background(iconBg.copy(0.12f)), contentAlignment = Alignment.Center) {
+                    Icon(icon, null, tint = iconBg, modifier = Modifier.size(24.dp))
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = STextPrimary)
+                Spacer(Modifier.height(8.dp))
+                Text(message, textAlign = TextAlign.Center, fontSize = 14.sp, color = STextSecondary, lineHeight = 20.sp)
+                Spacer(Modifier.height(24.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, SBorder), colors = ButtonDefaults.outlinedButtonColors(contentColor = STextSecondary)) {
+                        Text("Cancel")
+                    }
+                    Button(onClick = onConfirm, modifier = Modifier.weight(1f), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = confirmColor, contentColor = Color.White)) {
+                        Text(confirmLabel)
+                    }
                 }
             }
         }

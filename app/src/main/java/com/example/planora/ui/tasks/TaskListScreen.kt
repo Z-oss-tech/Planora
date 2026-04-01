@@ -124,6 +124,8 @@ fun TaskListScreen(navController: NavController) {
     val completedHabits = remember { mutableStateListOf<String>() }
     val listState       = rememberLazyListState()
 
+    var showCompletedTasks by remember { mutableStateOf(true) }
+
     // ── Firebase Listeners ────────────────────────────────────────────────────
     LaunchedEffect(userId) {
         if (userId.isEmpty()) return@LaunchedEffect
@@ -135,6 +137,13 @@ fun TaskListScreen(navController: NavController) {
                     ?: auth.currentUser?.displayName
                     ?: "there"
                 username = nameFromFirestore
+            }
+
+        db.collection("users").document(userId).collection("settings").document("preferences")
+            .addSnapshotListener { snapshot, _ ->
+                if (snapshot != null && snapshot.exists()) {
+                    showCompletedTasks = snapshot.getBoolean("showCompletedTasks") ?: true
+                }
             }
 
         db.collection("users").document(userId).collection("habits")
@@ -378,7 +387,7 @@ fun TaskListScreen(navController: NavController) {
                 }
 
                 // Completed
-                if (completedTasks.isNotEmpty()) {
+                if (showCompletedTasks && completedTasks.isNotEmpty()) {
                     item {
                         Spacer(Modifier.height(4.dp))
                         SectionLabel(
@@ -576,7 +585,7 @@ private fun GreetingSection(
             "$greeting, $firstName",
             fontSize      = 26.sp,
             fontWeight    = FontWeight.Bold,
-            color         = TextPrimary,
+            color = TextPrimary,
             letterSpacing = (-0.5).sp
         )
         Spacer(Modifier.height(16.dp))
@@ -1026,7 +1035,8 @@ private fun AddTaskDialog(
     var selectedRecur    by remember { mutableStateOf("None") }
     val subtasks         = remember { mutableStateListOf<SubTask>() }
     var subtaskInput     by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("Personal") } // ✅ ADD
+    var selectedCategory by remember { mutableStateOf("Personal") } 
+    var customCategory   by remember { mutableStateOf("") } // ✅ ADDED
     val focusMgr         = LocalFocusManager.current
     val recurrenceOpts   = listOf("None", "Daily", "Weekly")
 
@@ -1092,8 +1102,11 @@ private fun AddTaskDialog(
                 DialogLabel("Category")
                 Spacer(Modifier.height(6.dp))
 
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("Study", "Work", "Personal").forEach { cat ->
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf("Study", "Work", "Personal", "Custom").forEach { cat ->
                         SelectChip(
                             text = cat,
                             selected = cat == selectedCategory,
@@ -1101,6 +1114,20 @@ private fun AddTaskDialog(
                             onClick = { selectedCategory = cat }
                         )
                     }
+                }
+
+                if (selectedCategory == "Custom") {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value         = customCategory,
+                        onValueChange = { customCategory = it },
+                        placeholder   = { Text("Enter custom category...", color = TextTertiary, fontSize = 13.sp) },
+                        modifier      = Modifier.fillMaxWidth(),
+                        shape         = RoundedCornerShape(12.dp),
+                        colors        = outlinedFieldColors(),
+                        singleLine    = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                    )
                 }
 
                 Spacer(Modifier.height(14.dp))
@@ -1220,18 +1247,24 @@ private fun AddTaskDialog(
                     Button(
                         onClick = {
                             if (title.isNotBlank()) {
+                                val finalCategory = if (selectedCategory == "Custom") {
+                                    if (customCategory.isNotBlank()) customCategory.trim() else "Personal"
+                                } else {
+                                    selectedCategory
+                                }
+
                                 onConfirm(
                                     title,
                                     note,
                                     selectedPriority,
                                     selectedRecur,
                                     subtasks.toList(),
-                                    selectedCategory
+                                    finalCategory
                                 )
                                 onDismiss()
                             }
                         },
-                        enabled = title.isNotBlank(),
+                        enabled = title.isNotBlank() && (selectedCategory != "Custom" || customCategory.isNotBlank()),
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(

@@ -7,9 +7,7 @@ plugins {
 
 android {
     namespace = "com.example.planora"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.planora"
@@ -61,6 +59,9 @@ dependencies {
     implementation("com.google.firebase:firebase-firestore-ktx")
     implementation(libs.androidx.compose.runtime.saveable)
     implementation(libs.androidx.compose.foundation)
+
+    // WorkManager
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     // Image loading for profile picture
     implementation("io.coil-kt:coil-compose:2.5.0")

@@ -37,7 +37,7 @@ fun CategoryScreen(navController: NavController) {
     val db = FirebaseFirestore.getInstance()
     val userId = auth.currentUser?.uid ?: ""
 
-    var selectedCategory by remember { mutableStateOf("Study") }
+    var selectedCategory by remember { mutableStateOf("All") }
 
     val tasks = remember { mutableStateListOf<Task>() }
 
@@ -54,10 +54,17 @@ fun CategoryScreen(navController: NavController) {
     }
 
     val filteredTasks = tasks.filter {
-        it.category == selectedCategory && !it.completed
+        (selectedCategory == "All" || it.category == selectedCategory) && !it.completed
     }
 
-    val categoryList = listOf("Study", "Work", "Personal")
+    // 🔥 DYNAMIC CATEGORY LIST
+    val categoryList = remember(tasks) {
+        val base = listOf("All", "Study", "Work", "Personal")
+        val custom = tasks.map { it.category }
+            .filter { it !in base && it.isNotBlank() }
+            .distinct()
+        base + custom
+    }
 
     Column(
         modifier = Modifier
@@ -102,7 +109,11 @@ fun CategoryScreen(navController: NavController) {
             items(categoryList) { category ->
 
                 val isSelected = selectedCategory == category
-                val count = tasks.count { it.category == category && !it.completed }
+                val count = if (category == "All") {
+                    tasks.count { !it.completed }
+                } else {
+                    tasks.count { it.category == category && !it.completed }
+                }
 
                 Box(
                     modifier = Modifier
@@ -156,7 +167,7 @@ fun CategoryScreen(navController: NavController) {
 
         // 🔥 SELECTED CATEGORY HEADER
         Text(
-            text = "$selectedCategory Tasks",
+            text = if (selectedCategory == "All") "All Tasks" else "$selectedCategory Tasks",
             color = AccentBlue,
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp,
@@ -236,4 +247,3 @@ fun CategoryScreen(navController: NavController) {
         }
     }
 }
-

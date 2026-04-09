@@ -117,7 +117,7 @@ fun TaskListScreen(navController: NavController) {
     var quickAddText    by remember { mutableStateOf("") }
     var showAddDialog   by remember { mutableStateOf(false) }
     var showProfileMenu by remember { mutableStateOf(false) }
-    var selectedCategory by remember { mutableStateOf("All") } // ✅ ADDED
+    var selectedCategory by remember { mutableStateOf("All") } 
 
     val habits          = remember { mutableStateListOf<HabitData>() }
     val tasks           = remember { mutableStateListOf<Task>() }
@@ -125,6 +125,8 @@ fun TaskListScreen(navController: NavController) {
     val listState       = rememberLazyListState()
 
     var showCompletedTasks by remember { mutableStateOf(true) }
+    
+    var editingTask by remember { mutableStateOf<Task?>(null) } // ✅ Added for editing
 
     // ── Firebase Listeners ────────────────────────────────────────────────────
     LaunchedEffect(userId) {
@@ -174,6 +176,44 @@ fun TaskListScreen(navController: NavController) {
             }
     }
 
+    // ── Recurrence Logic ──────────────────────────────────────────────────────
+    LaunchedEffect(tasks.toList()) {
+        if (tasks.isEmpty()) return@LaunchedEffect
+        val now = System.currentTimeMillis()
+        val calendar = Calendar.getInstance()
+        
+        tasks.forEach { task ->
+            if (task.recurrence != "None") {
+                val lastReset = task.lastReset
+                calendar.timeInMillis = lastReset
+                
+                var shouldReset = false
+                when (task.recurrence) {
+                    "Daily" -> {
+                        calendar.add(Calendar.DAY_OF_YEAR, 1)
+                        if (now >= calendar.timeInMillis) shouldReset = true
+                    }
+                    "Weekly" -> {
+                        calendar.add(Calendar.WEEK_OF_YEAR, 1)
+                        if (now >= calendar.timeInMillis) shouldReset = true
+                    }
+                }
+                
+                if (shouldReset) {
+                    db.collection("users").document(userId).collection("tasks").document(task.id)
+                        .update(mapOf(
+                            "completed" to false,
+                            "lastReset" to now,
+                            "date" to now,
+                            "subtasks" to task.subtasks.map { it.copy(completed = false) }.map {
+                                mapOf("id" to it.id, "title" to it.title, "completed" to it.completed)
+                            }
+                        ))
+                }
+            }
+        }
+    }
+
     // ── Filtering ─────────────────────────────────────────────────────────────
     val calendar = Calendar.getInstance().apply {
         set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
@@ -181,7 +221,6 @@ fun TaskListScreen(navController: NavController) {
     }
     val todayStart = calendar.timeInMillis
 
-// ✅ CATEGORY FILTER
     val filteredTasks = tasks.filter {
         selectedCategory == "All" || it.category == selectedCategory
     }
@@ -202,6 +241,7 @@ fun TaskListScreen(navController: NavController) {
     val doneToday  = completedTasks.count { it.date >= todayStart }
     val taskProg   = if (totalToday == 0) 0f else doneToday.toFloat() / totalToday
     val habitProg  = if (habits.isEmpty()) 0f else completedHabits.size.toFloat() / habits.size
+    
     // ── Task Helpers ──────────────────────────────────────────────────────────
     fun addTask(
         title: String,
@@ -227,7 +267,7 @@ fun TaskListScreen(navController: NavController) {
             "completed"  to false,
             "date"       to System.currentTimeMillis(),
             "priority"   to priority.label,
-            "category"   to category, // ✅ FIXED (DYNAMIC)
+            "category"   to category,
             "recurrence" to recurrence,
             "lastReset"  to System.currentTimeMillis(),
             "subtasks"   to subtasksData
@@ -256,7 +296,6 @@ fun TaskListScreen(navController: NavController) {
             .background(BG)
             .pointerInput(Unit) { detectTapGestures { focusMgr.clearFocus() } }
     ) {
-        // Subtle ambient glow - static, no animation
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             drawCircle(
                 brush  = Brush.radialGradient(
@@ -279,7 +318,6 @@ fun TaskListScreen(navController: NavController) {
                 contentPadding = PaddingValues(bottom = 120.dp)
             ) {
 
-                // Greeting + stat cards
                 item {
                     GreetingSection(
                         todayDate  = todayDate,
@@ -293,7 +331,6 @@ fun TaskListScreen(navController: NavController) {
                     )
                 }
 
-                // Habits
                 if (habits.isNotEmpty()) {
                     item {
                         HabitStrip(
@@ -314,7 +351,6 @@ fun TaskListScreen(navController: NavController) {
                     }
                 }
 
-                // Quick add
                 item {
                     QuickAddBar(
                         value         = quickAddText,
@@ -327,7 +363,6 @@ fun TaskListScreen(navController: NavController) {
                     )
                 }
 
-                // Overdue
                 if (overdueTasks.isNotEmpty()) {
                     item {
                         SectionLabel(
@@ -343,6 +378,7 @@ fun TaskListScreen(navController: NavController) {
                             task             = task,
                             accentColor      = AccentRose,
                             onDelete         = { deleteTask(task.id) },
+                            onEdit           = { editingTask = task }, // ✅ Added edit hook
                             onToggleComplete = { done -> updateTask(task.id, mapOf("completed" to done)) },
                             onSubtaskToggle  = { subtaskId, done ->
                                 val updated = task.subtasks.map {
@@ -356,7 +392,6 @@ fun TaskListScreen(navController: NavController) {
                     item { Spacer(Modifier.height(4.dp)) }
                 }
 
-                // Today
                 item {
                     SectionLabel(
                         title       = "Today's Focus",
@@ -374,6 +409,7 @@ fun TaskListScreen(navController: NavController) {
                             task             = task,
                             accentColor      = priorityColor(task.priority),
                             onDelete         = { deleteTask(task.id) },
+                            onEdit           = { editingTask = task }, // ✅ Added edit hook
                             onToggleComplete = { done -> updateTask(task.id, mapOf("completed" to done)) },
                             onSubtaskToggle  = { subtaskId, done ->
                                 val updated = task.subtasks.map {
@@ -386,7 +422,6 @@ fun TaskListScreen(navController: NavController) {
                     }
                 }
 
-                // Completed
                 if (showCompletedTasks && completedTasks.isNotEmpty()) {
                     item {
                         Spacer(Modifier.height(4.dp))
@@ -403,6 +438,7 @@ fun TaskListScreen(navController: NavController) {
                             task             = task,
                             accentColor      = AccentGreen,
                             onDelete         = { deleteTask(task.id) },
+                            onEdit           = { editingTask = task }, // ✅ Added edit hook
                             onToggleComplete = { done -> updateTask(task.id, mapOf("completed" to done)) },
                             onSubtaskToggle  = { subtaskId, done ->
                                 val updated = task.subtasks.map {
@@ -417,7 +453,6 @@ fun TaskListScreen(navController: NavController) {
             }
         }
 
-        // FAB
         FloatingActionButton(
             onClick            = { showAddDialog = true },
             modifier           = Modifier
@@ -445,6 +480,25 @@ fun TaskListScreen(navController: NavController) {
                         subtasks = subtasks
                     )
                     showAddDialog = false
+                }
+            )
+        }
+        
+        // ✅ Added Update Dialog
+        if (editingTask != null) {
+            EditTaskDialog(
+                task = editingTask!!,
+                onDismiss = { editingTask = null },
+                onConfirm = { title, note, priority, recurrence, subtasks, category ->
+                    updateTask(editingTask!!.id, mapOf(
+                        "title" to title,
+                        "note" to note,
+                        "priority" to priority.label,
+                        "recurrence" to recurrence,
+                        "category" to category,
+                        "subtasks" to subtasks.map { mapOf("id" to it.id, "title" to it.title, "completed" to it.completed) }
+                    ))
+                    editingTask = null
                 }
             )
         }
@@ -478,13 +532,11 @@ private fun TopBar(username: String, onProfileClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
 
-        // 🔥 LOGO SECTION (PREMIUM)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
 
-            // 🔥 GLASS LOGO CONTAINER
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -505,7 +557,6 @@ private fun TopBar(username: String, onProfileClick: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
 
-                // 👉 USE YOUR LOGO HERE
                 Image(
                     painter = painterResource(id = R.drawable.planora),
                     contentDescription = "App Logo",
@@ -530,7 +581,6 @@ private fun TopBar(username: String, onProfileClick: () -> Unit) {
             }
         }
 
-        // 🔥 PROFILE (ENHANCED)
         Box(
             modifier = Modifier
                 .size(38.dp)
@@ -590,7 +640,6 @@ private fun GreetingSection(
         )
         Spacer(Modifier.height(16.dp))
 
-        // Stat cards row
         Row(
             modifier              = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -798,6 +847,7 @@ private fun SwipeableTaskCard(
     task:             Task,
     accentColor:      Color,
     onDelete:         () -> Unit,
+    onEdit:           () -> Unit, // ✅ Added edit hook
     onToggleComplete: (Boolean) -> Unit,
     onSubtaskToggle:  (subtaskId: String, done: Boolean) -> Unit
 ) {
@@ -833,7 +883,13 @@ private fun SwipeableTaskCard(
             }
         }
     ) {
-        TaskCard(task = task, accentColor = accentColor, onToggleComplete = onToggleComplete, onSubtaskToggle = onSubtaskToggle)
+        TaskCard(
+            task = task, 
+            accentColor = accentColor, 
+            onToggleComplete = onToggleComplete, 
+            onSubtaskToggle = onSubtaskToggle,
+            onEdit = onEdit // ✅ Passed edit hook
+        )
     }
 }
 
@@ -843,7 +899,8 @@ private fun TaskCard(
     task:             Task,
     accentColor:      Color,
     onToggleComplete: (Boolean) -> Unit,
-    onSubtaskToggle:  (subtaskId: String, done: Boolean) -> Unit
+    onSubtaskToggle:  (subtaskId: String, done: Boolean) -> Unit,
+    onEdit:           () -> Unit // ✅ Added edit param
 ) {
     Column(
         modifier = Modifier
@@ -852,12 +909,10 @@ private fun TaskCard(
             .background(Surface1)
             .border(1.dp, Border, RoundedCornerShape(16.dp))
     ) {
-        // ── Main row ────────────────────────────────────────────────────────
         Row(
             modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Left accent bar
             Box(
                 modifier = Modifier
                     .width(3.dp)
@@ -868,7 +923,6 @@ private fun TaskCard(
 
             Spacer(Modifier.width(12.dp))
 
-            // Checkbox
             Box(
                 modifier = Modifier
                     .size(22.dp)
@@ -885,7 +939,7 @@ private fun TaskCard(
 
             Spacer(Modifier.width(12.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.weight(1f).clickable { onEdit() }) { // ✅ Clickable title to edit
                 Text(
                     task.title,
                     color          = if (task.completed) TextSecondary else TextPrimary,
@@ -901,7 +955,6 @@ private fun TaskCard(
                 }
                 Spacer(Modifier.height(6.dp))
 
-                // Badges row
                 Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
                     val pEnum = Priority.values().firstOrNull { it.label == task.priority } ?: Priority.NORMAL
                     SmallBadge(text = task.priority, color = pEnum.color)
@@ -910,7 +963,6 @@ private fun TaskCard(
                     Text(dateStr, fontSize = 10.sp, color = TextTertiary)
                 }
 
-                // Subtask inline progress (if any)
                 if (task.subtasks.isNotEmpty()) {
                     val subDone  = task.subtasks.count { it.completed }
                     val subTotal = task.subtasks.size
@@ -935,9 +987,13 @@ private fun TaskCard(
                     }
                 }
             }
+            
+            // ✅ Added Edit Button
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Outlined.Edit, "Edit", tint = TextTertiary, modifier = Modifier.size(18.dp))
+            }
         }
 
-        // ── Subtask list ──────────────────────────────────────────────────────
         if (task.subtasks.isNotEmpty()) {
             HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 14.dp))
             Column(modifier = Modifier.padding(start = 41.dp, end = 14.dp, top = 6.dp, bottom = 10.dp)) {
@@ -1036,7 +1092,7 @@ private fun AddTaskDialog(
     val subtasks         = remember { mutableStateListOf<SubTask>() }
     var subtaskInput     by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("Personal") } 
-    var customCategory   by remember { mutableStateOf("") } // ✅ ADDED
+    var customCategory   by remember { mutableStateOf("") } 
     val focusMgr         = LocalFocusManager.current
     val recurrenceOpts   = listOf("None", "Daily", "Weekly")
 
@@ -1050,11 +1106,9 @@ private fun AddTaskDialog(
         ) {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
 
-                // Header
                 Text("New Task", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
                 Spacer(Modifier.height(16.dp))
 
-                // Title
                 DialogLabel("Title")
                 Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
@@ -1069,7 +1123,6 @@ private fun AddTaskDialog(
                 )
                 Spacer(Modifier.height(12.dp))
 
-                // Note
                 DialogLabel("Note")
                 Spacer(Modifier.height(6.dp))
                 OutlinedTextField(
@@ -1084,7 +1137,6 @@ private fun AddTaskDialog(
                 )
                 Spacer(Modifier.height(14.dp))
 
-                // Priority
                 DialogLabel("Priority")
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1132,7 +1184,6 @@ private fun AddTaskDialog(
 
                 Spacer(Modifier.height(14.dp))
 
-                // Recurrence
                 DialogLabel("Repeat")
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1147,11 +1198,9 @@ private fun AddTaskDialog(
                 }
                 Spacer(Modifier.height(14.dp))
 
-                // Subtasks
                 DialogLabel("Subtasks")
                 Spacer(Modifier.height(6.dp))
 
-                // Subtask input row
                 Row(
                     modifier          = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -1190,7 +1239,6 @@ private fun AddTaskDialog(
                     }
                 }
 
-                // Subtask list
                 if (subtasks.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     Column(
@@ -1233,7 +1281,6 @@ private fun AddTaskDialog(
 
                 Spacer(Modifier.height(20.dp))
 
-                // Action buttons
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedButton(
                         onClick  = { onDismiss() },
@@ -1275,6 +1322,261 @@ private fun AddTaskDialog(
                         )
                     ) {
                         Text("Add Task", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ✅ Added Edit Task Dialog
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditTaskDialog(
+    task: Task,
+    onDismiss: () -> Unit,
+    onConfirm: (
+        title: String,
+        note: String,
+        priority: Priority,
+        recurrence: String,
+        subtasks: List<SubTask>,
+        category: String
+    ) -> Unit
+)
+{
+    var title            by remember { mutableStateOf(task.title) }
+    var note             by remember { mutableStateOf(task.note) }
+    var selectedPriority by remember { mutableStateOf(Priority.values().firstOrNull { it.label == task.priority } ?: Priority.NORMAL) }
+    var selectedRecur    by remember { mutableStateOf(task.recurrence) }
+    val subtasks         = remember { mutableStateListOf<SubTask>().apply { addAll(task.subtasks) } }
+    var subtaskInput     by remember { mutableStateOf("") }
+    
+    val baseCategories = listOf("Study", "Work", "Personal")
+    var selectedCategory by remember { mutableStateOf(if (task.category in baseCategories) task.category else "Custom") } 
+    var customCategory   by remember { mutableStateOf(if (task.category !in baseCategories) task.category else "") } 
+    
+    val focusMgr         = LocalFocusManager.current
+    val recurrenceOpts   = listOf("None", "Daily", "Weekly")
+
+    Dialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(Surface1)
+                .border(1.dp, Border, RoundedCornerShape(24.dp))
+        ) {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
+
+                Text("Update Task", fontWeight = FontWeight.Bold, fontSize = 20.sp, color = TextPrimary)
+                Spacer(Modifier.height(16.dp))
+
+                DialogLabel("Title")
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value         = title,
+                    onValueChange = { title = it },
+                    modifier      = Modifier.fillMaxWidth(),
+                    shape         = RoundedCornerShape(12.dp),
+                    colors        = outlinedFieldColors(),
+                    singleLine    = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next)
+                )
+                Spacer(Modifier.height(12.dp))
+
+                DialogLabel("Note")
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value         = note,
+                    onValueChange = { note = it },
+                    modifier      = Modifier.fillMaxWidth().height(80.dp),
+                    shape         = RoundedCornerShape(12.dp),
+                    colors        = outlinedFieldColors(),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { focusMgr.clearFocus() })
+                )
+                Spacer(Modifier.height(14.dp))
+
+                DialogLabel("Priority")
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Priority.values().forEach { p ->
+                        SelectChip(
+                            text     = p.label,
+                            selected = p == selectedPriority,
+                            color    = p.color,
+                            onClick  = { selectedPriority = p }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+
+                DialogLabel("Category")
+                Spacer(Modifier.height(6.dp))
+
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    (baseCategories + "Custom").forEach { cat ->
+                        SelectChip(
+                            text = cat,
+                            selected = cat == selectedCategory,
+                            color = AccentBlue,
+                            onClick = { selectedCategory = cat }
+                        )
+                    }
+                }
+
+                if (selectedCategory == "Custom") {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value         = customCategory,
+                        onValueChange = { customCategory = it },
+                        placeholder   = { Text("Enter custom category...", color = TextTertiary, fontSize = 13.sp) },
+                        modifier      = Modifier.fillMaxWidth(),
+                        shape         = RoundedCornerShape(12.dp),
+                        colors        = outlinedFieldColors(),
+                        singleLine    = true
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                DialogLabel("Repeat")
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    recurrenceOpts.forEach { opt ->
+                        SelectChip(
+                            text     = opt,
+                            selected = opt == selectedRecur,
+                            color    = AccentPurple,
+                            onClick  = { selectedRecur = opt }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+
+                DialogLabel("Subtasks")
+                Spacer(Modifier.height(6.dp))
+
+                Row(
+                    modifier          = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value         = subtaskInput,
+                        onValueChange = { subtaskInput = it },
+                        placeholder   = { Text("Add subtask...", color = TextTertiary, fontSize = 13.sp) },
+                        modifier      = Modifier.weight(1f),
+                        shape         = RoundedCornerShape(10.dp),
+                        colors        = outlinedFieldColors(),
+                        singleLine    = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            if (subtaskInput.isNotBlank()) {
+                                subtasks.add(SubTask(id = UUID.randomUUID().toString(), title = subtaskInput.trim()))
+                                subtaskInput = ""
+                            }
+                        })
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (subtaskInput.isNotBlank()) AccentBlue else Surface3)
+                            .clickable(enabled = subtaskInput.isNotBlank()) {
+                                if (subtaskInput.isNotBlank()) {
+                                    subtasks.add(SubTask(id = UUID.randomUUID().toString(), title = subtaskInput.trim()))
+                                    subtaskInput = ""
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Add, null, tint = if (subtaskInput.isNotBlank()) Color.White else TextTertiary, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                if (subtasks.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Surface2)
+                            .border(1.dp, Border, RoundedCornerShape(12.dp))
+                    ) {
+                        subtasks.forEachIndexed { index, subtask ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(AccentBlue.copy(0.5f))
+                                )
+                                Text(subtask.title, fontSize = 13.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "Remove",
+                                    tint               = TextTertiary,
+                                    modifier           = Modifier
+                                        .size(16.dp)
+                                        .clickable { subtasks.removeAt(index) }
+                                )
+                            }
+                            if (index < subtasks.lastIndex) {
+                                HorizontalDivider(color = Border, modifier = Modifier.padding(horizontal = 12.dp))
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedButton(
+                        onClick  = { onDismiss() },
+                        modifier = Modifier.weight(1f),
+                        shape    = RoundedCornerShape(12.dp),
+                        border   = BorderStroke(1.dp, Border),
+                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary)
+                    ) {
+                        Text("Cancel", fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = {
+                            if (title.isNotBlank()) {
+                                val finalCategory = if (selectedCategory == "Custom") {
+                                    if (customCategory.isNotBlank()) customCategory.trim() else "Personal"
+                                } else {
+                                    selectedCategory
+                                }
+
+                                onConfirm(
+                                    title,
+                                    note,
+                                    selectedPriority,
+                                    selectedRecur,
+                                    subtasks.toList(),
+                                    finalCategory
+                                )
+                                onDismiss()
+                            }
+                        },
+                        enabled = title.isNotBlank() && (selectedCategory != "Custom" || customCategory.isNotBlank()),
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentBlue)
+                    ) {
+                        Text("Update", fontWeight = FontWeight.Bold)
                     }
                 }
             }

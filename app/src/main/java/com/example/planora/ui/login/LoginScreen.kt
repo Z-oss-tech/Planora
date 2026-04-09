@@ -1,5 +1,6 @@
 package com.example.planora.ui.login
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
@@ -16,10 +18,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -27,12 +29,11 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.planora.utils.FirebaseUtils
 
-// --- Using the same theme constants ---
+// --- Colors ---
 private val ThemeBackground = Color.Black
 private val Primary = Color(0xFFADC6FF)
 private val PrimaryContainer = Color(0xFF4D8EFF)
 private val OnPrimaryContainer = Color(0xFF00285D)
-private val Secondary = Color(0xFF45F798)
 private val OnSurface = Color(0xFFE2E2E2)
 private val OnSurfaceVariant = Color(0xFFC2C6D6)
 private val Zinc500 = Color(0xFF71717A)
@@ -46,6 +47,8 @@ fun LoginScreen(navController: NavController) {
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var showForgotDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
     Box(
         modifier = Modifier
@@ -53,9 +56,6 @@ fun LoginScreen(navController: NavController) {
             .background(ThemeBackground)
             .windowInsetsPadding(WindowInsets.systemBars)
     ) {
-        // --- Decorative Blurs (One UI inspired depth) ---
-
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -138,7 +138,7 @@ fun LoginScreen(navController: NavController) {
                 modifier = Modifier
                     .align(Alignment.End)
                     .padding(top = 12.dp)
-                    .clickable { /* Handle Forgot Password */ }
+                    .clickable { showForgotDialog = true }
             )
 
             errorMessage?.let {
@@ -159,10 +159,11 @@ fun LoginScreen(navController: NavController) {
                         return@Button
                     }
                     isLoading = true
-                    FirebaseUtils.auth.signInWithEmailAndPassword(email, password)
+                    FirebaseUtils.auth.signInWithEmailAndPassword(email.trim(), password.trim())
                         .addOnSuccessListener {
                             isLoading = false
-                            navController.navigate("home") {
+                            // Fixed: Correct route name is "today", not "home"
+                            navController.navigate("today") {
                                 popUpTo("login") { inclusive = true }
                             }
                         }
@@ -214,5 +215,67 @@ fun LoginScreen(navController: NavController) {
                 )
             }
         }
+    }
+
+    if (showForgotDialog) {
+        var forgotEmail by remember { mutableStateOf(email) }
+        var isSending by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { if (!isSending) showForgotDialog = false },
+            title = { Text("Reset Password") },
+            text = {
+                Column {
+                    Text("Enter your email address to receive a reset link.")
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = forgotEmail,
+                        onValueChange = { forgotEmail = it },
+                        label = { Text("Email") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        enabled = !isSending,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !isSending,
+                    onClick = {
+                        val targetEmail = forgotEmail.trim()
+                        if (targetEmail.isEmpty()) {
+                            Toast.makeText(context, "Please enter an email", Toast.LENGTH_SHORT).show()
+                            return@TextButton
+                        }
+                        isSending = true
+                        FirebaseUtils.auth.sendPasswordResetEmail(targetEmail)
+                            .addOnCompleteListener { task ->
+                                isSending = false
+                                if (task.isSuccessful) {
+                                    Toast.makeText(context, "Reset link sent to $targetEmail", Toast.LENGTH_LONG).show()
+                                    showForgotDialog = false
+                                } else {
+                                    Toast.makeText(context, "Error: ${task.exception?.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                    }
+                ) {
+                    if (isSending) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    } else {
+                        Text("Send Link")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !isSending,
+                    onClick = { showForgotDialog = false }
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }

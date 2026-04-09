@@ -35,8 +35,7 @@ import com.example.planora.ui.login.RegisterScreen
 import com.example.planora.ui.settings.SettingsScreen
 import androidx.compose.material.icons.filled.Category
 import com.example.planora.ui.category.CategoryScreen
-
-// Import your other screens here as needed
+import com.example.planora.ui.splash.SplashScreen
 
 sealed class Screen(val route: String, val label: String, val icon: ImageVector) {
     object Today : Screen("today", "Today", Icons.Default.CheckCircle)
@@ -53,16 +52,13 @@ fun MainScreen(navController: NavHostController, startDestination: String) {
     val currentRoute = navBackStackEntry?.destination?.route
     val showBottomBar = items.any { it.route == currentRoute }
 
-    // Colours kept consistent with the rest of the app's dark palette
     val navBg       = Color(0xFF111116)
-    val navBorder   = Color(0xFF2A2A38)
     val activeColor = Color(0xFF6C8FFF)
     val inactiveColor = Color(0xFF4A4A64)
 
     Scaffold(
         bottomBar = {
             if (showBottomBar) {
-                // Floating pill nav bar — sits above the system nav bar with breathing room
                 NavigationBar(
                     containerColor = navBg,
                     tonalElevation = 0.dp,
@@ -81,10 +77,7 @@ fun MainScreen(navController: NavHostController, startDestination: String) {
                                 Icon(
                                     imageVector        = screen.icon,
                                     contentDescription = null,
-                                    // Active icon is slightly larger visually via the tint contrast
-                                    tint               = if (isSelected) activeColor else inactiveColor,
-                                    modifier           = Modifier
-                                        .padding(bottom = if (isSelected) 0.dp else 0.dp)
+                                    tint               = if (isSelected) activeColor else inactiveColor
                                 )
                             },
                             label = {
@@ -107,7 +100,6 @@ fun MainScreen(navController: NavHostController, startDestination: String) {
                                 }
                             },
                             colors = NavigationBarItemDefaults.colors(
-                                // Subtle pill highlight behind the active icon
                                 indicatorColor         = activeColor.copy(alpha = 0.12f),
                                 selectedIconColor      = activeColor,
                                 selectedTextColor      = activeColor,
@@ -127,12 +119,13 @@ fun MainScreen(navController: NavHostController, startDestination: String) {
             startDestination = startDestination,
             modifier         = Modifier.padding(innerPadding)
         ) {
+            composable("splash")             { SplashScreen(navController) }
             composable("login")              { LoginScreen(navController) }
             composable("register")           { RegisterScreen(navController) }
             composable(Screen.Today.route)   { TaskListScreen(navController) }
             composable(Screen.Habits.route)  { HabitsScreen(navController) }
-            composable(Screen.Category.route) { CategoryScreen(navController) } // ✅ ADDED
-            composable(Screen.Settings.route) {  SettingsScreen(navController)  }
+            composable(Screen.Category.route) { CategoryScreen(navController) }
+            composable(Screen.Settings.route) { SettingsScreen(navController) }
         }
     }
 }
